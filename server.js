@@ -224,26 +224,22 @@ function loadImage(imageBuffer) {
 }
 
 function findHomography(templateGray, inputGray) {
+    // @u4/opencv4nodejs exposes detect() + compute(), not detectAndCompute().
     const orb = new cv.ORBDetector({
-        nFeatures: 3000
+        maxFeatures: 3000
     });
 
-    const templateResult = orb.detectAndCompute(templateGray);
-    const inputResult = orb.detectAndCompute(inputGray);
+    const kp1 = orb.detect(templateGray);
+    const des1 = orb.compute(templateGray, kp1);
 
-    const kp1 = templateResult.keyPoints;
-    const des1 = templateResult.descriptors;
-
-    const kp2 = inputResult.keyPoints;
-    const des2 = inputResult.descriptors;
+    const kp2 = orb.detect(inputGray);
+    const des2 = orb.compute(inputGray, kp2);
 
     if (!des1 || !des2 || des1.rows === 0 || des2.rows === 0) {
         throw new Error("No features found");
     }
 
-    const matcher = new cv.BFMatcher(cv.NORM_HAMMING);
-
-    const matches = matcher.knnMatch(des1, des2, 2);
+    const matches = cv.matchKnnBruteForceHamming(des1, des2, 2);
 
     const good = [];
 
@@ -266,25 +262,11 @@ function findHomography(templateGray, inputGray) {
     }
 
     const srcPoints = good.map(
-        m => kp1[m.queryIdx].point
+        m => kp1[m.queryIdx].pt
     );
 
     const dstPoints = good.map(
-        m => kp2[m.trainIdx].point
-    );
-
-    const srcMat = cv.matFromArray(
-        srcPoints.length,
-        2,
-        cv.CV_32F,
-        srcPoints.flatMap(p => [p.x, p.y])
-    );
-
-    const dstMat = cv.matFromArray(
-        dstPoints.length,
-        2,
-        cv.CV_32F,
-        dstPoints.flatMap(p => [p.x, p.y])
+        m => kp2[m.trainIdx].pt
     );
 
     // Same direction as the original Python:
@@ -292,8 +274,8 @@ function findHomography(templateGray, inputGray) {
     // H = findHomography(dst, src, RANSAC, 5)
     //
     const result = cv.findHomography(
-        dstMat,
-        srcMat,
+        dstPoints,
+        srcPoints,
         cv.RANSAC,
         5
     );
@@ -311,7 +293,7 @@ function warpImage(img, H) {
         new cv.Size(TARGET_W, TARGET_H),
         cv.INTER_LINEAR,
         cv.BORDER_CONSTANT,
-        new cv.Vec(255, 255, 255)
+        new cv.Vec3(255, 255, 255)
     );
 }
 

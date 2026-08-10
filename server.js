@@ -1,6 +1,5 @@
 const express = require("express");
-const cv = require("opencv4nodejs");
-const sharp = require("sharp");
+const cv = require("@u4/opencv4nodejs");
 const { createWorker } = require("tesseract.js");
 const fs = require("fs");
 const path = require("path");
@@ -11,6 +10,11 @@ const PORT = process.env.PORT || 3000;
 
 // Increase this if your images are large.
 app.use(express.json({ limit: "20mb" }));
+
+app.get("/health", (_req, res) => {
+    res.json({ ok: true });
+});
+
 
 const TEMPLATE_PATH = path.join(__dirname, "template.jpg");
 

@@ -450,7 +450,7 @@ async function processDocument(inputBuffer, worker) {
     // -------------------------------------------------------------------------
 
     const quantities = [];
-    const kilograms = {};
+    const kilograms = [];
 
     for (let i = 0; i < selectedMaterials.length; i++) {
         const material = selectedMaterials[i];
@@ -465,6 +465,19 @@ async function processDocument(inputBuffer, worker) {
             y + 34
         );
 
+        const cantidadText = await ocrMat(
+            worker,
+            cantidad
+        );
+
+        quantities.push(
+            parseInteger(cantidadText)
+        );
+    }
+
+    for (let i = 0; i < 8; i++) {
+        y = Math.floor(415 + 72.5 * (0.5 + i));
+
         const kg = cropMat(
             bw,
             kg_pos[0],
@@ -473,22 +486,15 @@ async function processDocument(inputBuffer, worker) {
             y + 34
         );
 
-        const cantidadText = await ocrMat(
-            worker,
-            cantidad
-        );
-
         const kgText = await ocrMat(
             worker,
             kg
         );
 
-        quantities.push(
-            parseInteger(cantidadText)
-        );
+        if (!kgText || kgText.trim() == "")
+            continue;
 
-        kilograms[material.name] =
-            parseInteger(kgText);
+        kilograms.push(parseInteger(kgText));
     }
 
     // -------------------------------------------------------------------------

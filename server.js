@@ -137,6 +137,15 @@ const clips = [
     ["time22", [1526, 1250, 1990, 1312]]
 ];
 
+// Signature boxes at the bottom of the aligned template (2100x1650).
+const firmaClips = [
+    ["elaboro_plastict", [60, 1345, 450, 1610]],
+    ["responsable_supervisor", [450, 1345, 840, 1610]],
+    ["autoriza_melii", [840, 1345, 1230, 1610]],
+    ["recibio_y_entrego_operador", [1230, 1345, 1620, 1610]],
+    ["recibio_cliente", [1620, 1345, 2010, 1610]]
+];
+
 // -----------------------------------------------------------------------------
 // Utilities
 // -----------------------------------------------------------------------------
@@ -419,6 +428,91 @@ async function ocrMat(mat, fieldName = "text") {
     return cleanOcrText(text);
 }
 
+function normalizeFirmaResult(raw) {
+    let filled = Boolean(raw?.filled);
+    let value = raw?.value;
+
+    if (typeof value === "string") {
+        value = cleanOcrText(value);
+    } else {
+        value = null;
+    }
+
+    if (!filled) {
+        return {
+            filled: false,
+            value: null
+        };
+    }
+
+    if (!value) {
+        value = "Unknown";
+    }
+
+    return {
+        filled: true,
+        value
+    };
+}
+
+async function ocrFirma(mat) {
+    if (!OPENAI_API_KEY) {
+        throw new Error("OPENAI_API_KEY is not configured");
+    }
+
+    const buffer = matToPng(mat);
+    const base64 = buffer.toString("base64");
+
+    const response = await openai.chat.completions.create({
+        model: OPENAI_MODEL,
+        temperature: 0,
+        max_tokens: 80,
+        response_format: { type: "json_object" },
+        messages: [
+            {
+                role: "system",
+                content:
+                    "You analyze signature boxes on Spanish industrial forms. " +
+                    "Return JSON only with keys filled and value. " +
+                    "filled=true if there is any handwritten signature, mark, or name. " +
+                    "filled=false if the box is blank. " +
+                    "value is the readable person name when possible. " +
+                    "If filled but the name cannot be read, value must be \"Unknown\". " +
+                    "If not filled, value must be null."
+            },
+            {
+                role: "user",
+                content: [
+                    {
+                        type: "text",
+                        text:
+                            "Inspect this signature box and return " +
+                            '{"filled":boolean,"value":string|null}.'
+                    },
+                    {
+                        type: "image_url",
+                        image_url: {
+                            url: `data:image/png;base64,${base64}`,
+                            detail: "high"
+                        }
+                    }
+                ]
+            }
+        ]
+    });
+
+    const text = response.choices?.[0]?.message?.content || "{}";
+
+    try {
+        return normalizeFirmaResult(JSON.parse(text));
+    } catch {
+        return {
+            filled: false,
+            value: null
+        };
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Main document processing
 // -----------------------------------------------------------------------------
@@ -500,10 +594,32 @@ async function processDocument(inputBuffer) {
     const ocr = Object.fromEntries(ocrEntries);
 
     // -------------------------------------------------------------------------
-    // OCR quantity / kilogram fields
+    // OCR signature boxes
     // -------------------------------------------------------------------------
 
-    const quantities = await Promise.all(
+    const firmaEntries = await Promise.all(
+        firmaClips.map(async ([name, [x1, y1, x2, y2]]) => {
+            const clip = cropMat(
+                aligned,
+                x1,
+                y1,
+                x2,
+                y2
+            );
+
+            const firma = await ocrFirma(clip);
+
+            return [name, firma];
+        })
+    );
+
+    const firmas = Object.fromEntries(firmaEntries);
+
+    // -------------------------------------------------------------------------
+    // OCR quantity / kilogram fields (same row as each selected material)
+    // -------------------------------------------------------------------------
+
+    const materialFields = await Promise.all(
         selectedMaterials.map(async (material) => {
             const y = material.y;
 
@@ -515,19 +631,6 @@ async function processDocument(inputBuffer) {
                 y + 34
             );
 
-            const cantidadText = await ocrMat(
-                cantidad,
-                "cantidad"
-            );
-
-            return parseInteger(cantidadText);
-        })
-    );
-
-    const kilogramResults = await Promise.all(
-        Array.from({ length: 8 }, async (_, i) => {
-            const y = Math.floor(415 + 72.5 * (0.5 + i));
-
             const kg = cropMat(
                 aligned,
                 kg_pos[0],
@@ -536,23 +639,30 @@ async function processDocument(inputBuffer) {
                 y + 34
             );
 
-            const kgText = await ocrMat(kg, "kg");
+            const [cantidadText, kgText] = await Promise.all([
+                ocrMat(cantidad, "cantidad"),
+                ocrMat(kg, "kg")
+            ]);
 
-            if (!kgText) {
-                return null;
-            }
-
-            return parseInteger(kgText);
+            return {
+                cantidad: parseInteger(cantidadText),
+                kilogramos: parseInteger(kgText)
+            };
         })
-    );
-
-    const kilograms = kilogramResults.filter(
-        (value) => value !== null
     );
 
     // -------------------------------------------------------------------------
     // Construct result matching schema.json
     // -------------------------------------------------------------------------
+
+    const materialsResult = selectedMaterials.map(
+        (material, index) => ({
+            material: material.name,
+            cantidad: materialFields[index].cantidad,
+            unidad: selectedUdms[index]?.name ?? null,
+            kilogramos: materialFields[index].kilogramos
+        })
+    );
 
     const result = {
         documento: {
@@ -561,19 +671,10 @@ async function processDocument(inputBuffer) {
             fecha: parseDate(ocr.fecha)
         },
 
-        materials: selectedMaterials.map(
-            (material, index) => ({
-                material: material.name,
-                cantidad: quantities[index],
-                unidad:
-                    selectedUdms[index]?.name ?? null
-            })
-        ),
+        materials: materialsResult,
 
         selected_unidad:
             selectedUnidad[0]?.name ?? null,
-
-        kilogramos: kilograms,
 
         operador: {
             nombre: ocr.oper1,
@@ -603,28 +704,7 @@ async function processDocument(inputBuffer) {
                 parseDateTime(ocr.time22)
         },
 
-        firmas: {
-            elaboro_plastict: {
-                valor: "firma manuscrita",
-                nombre_probable: null
-            },
-
-            responsable_supervisor: {
-                valor: "firma manuscrita"
-            },
-
-            autoriza_melii: {
-                nombre: null
-            },
-
-            recibio_y_entrego_operador: {
-                valor: "firma manuscrita"
-            },
-
-            recibio_cliente: {
-                valor: "firma manuscrita"
-            }
-        }
+        firmas
     };
 
     return result;

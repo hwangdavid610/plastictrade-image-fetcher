@@ -127,9 +127,10 @@ const clips = [
     ["fecha", [1434, 302, 1995, 359]],
 
     ["oper1", [71, 1054, 490, 1151]],
-    ["oper2", [496, 1054, 726, 1151]],
-    ["oper3", [737, 1054, 1288, 1151]],
-    ["oper4", [1628, 1054, 1990, 1151]],
+    ["oper2", [496, 1054, 780, 1151]],
+    ["oper3", [790, 1054, 1180, 1151]],
+    ["oper4", [1190, 1054, 1580, 1151]],
+    ["oper5", [1590, 1054, 1990, 1151]],
 
     ["time11", [515, 1201, 1025, 1250]],
     ["time12", [515, 1250, 1025, 1312]],
@@ -374,6 +375,7 @@ const FIELD_HINTS = {
     oper2: "Extract the operator ID.",
     oper3: "Extract the vehicle license plate.",
     oper4: "Extract the trailer/box license plate.",
+    oper5: "Extract the seal/marchamo number. Digits preferred.",
     time11: "Extract the date and time of site entry.",
     time12: "Extract the date and time of site exit.",
     time21: "Extract the date and time of warehouse entry.",
@@ -688,11 +690,7 @@ async function processDocument(inputBuffer) {
             id_operador: ocr.oper2,
             placas_vehiculo: ocr.oper3,
             placas_caja_remolque: ocr.oper4,
-
-            // There is no separate numero_marchamo clip
-            // in proc.py, so it cannot be reliably extracted
-            // from the supplied processing definition.
-            numero_marchamo: null
+            numero_marchamo: ocr.oper5
         },
 
         cliente_de_servicio: {

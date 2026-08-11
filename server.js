@@ -1,12 +1,24 @@
 const express = require("express");
 const cv = require("@u4/opencv4nodejs");
-const { createWorker } = require("tesseract.js");
+const OpenAI = require("openai");
 const fs = require("fs");
 const path = require("path");
 
 const app = express();
 
 const PORT = process.env.PORT || 3000;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+
+if (!OPENAI_API_KEY) {
+    console.warn(
+        "Warning: OPENAI_API_KEY is not set. /process will fail until it is configured."
+    );
+}
+
+const openai = new OpenAI({
+    apiKey: OPENAI_API_KEY
+});
 
 // Increase this if your images are large.
 app.use(express.json({ limit: "20mb" }));
@@ -342,26 +354,67 @@ function matToPng(mat) {
 }
 
 // -----------------------------------------------------------------------------
-// OCR
+// OCR (OpenAI Vision)
 // -----------------------------------------------------------------------------
 
-async function createOcrWorker() {
-    const worker = await createWorker("eng");
+const FIELD_HINTS = {
+    sitio: "Extract the site/location name written in this box.",
+    folio: "Extract the folio/document number. Digits only if possible.",
+    fecha: "Extract the date. Prefer YYYY-MM-DD or DD/MM/YYYY.",
+    oper1: "Extract the operator full name.",
+    oper2: "Extract the operator ID.",
+    oper3: "Extract the vehicle license plate.",
+    oper4: "Extract the trailer/box license plate.",
+    time11: "Extract the date and time of site entry.",
+    time12: "Extract the date and time of site exit.",
+    time21: "Extract the date and time of warehouse entry.",
+    time22: "Extract the date and time of warehouse exit.",
+    cantidad: "Extract the quantity as an integer number only.",
+    kg: "Extract the kilograms as an integer number only."
+};
 
-    await worker.setParameters({
-        // Documents contain numbers, names and text.
-        tessedit_pageseg_mode: "6"
+async function ocrMat(mat, fieldName = "text") {
+    if (!OPENAI_API_KEY) {
+        throw new Error("OPENAI_API_KEY is not configured");
+    }
+
+    const buffer = matToPng(mat);
+    const base64 = buffer.toString("base64");
+    const hint = FIELD_HINTS[fieldName] ||
+        "Extract the handwritten or printed text in this image.";
+
+    const response = await openai.chat.completions.create({
+        model: OPENAI_MODEL,
+        temperature: 0,
+        max_tokens: 80,
+        messages: [
+            {
+                role: "system",
+                content:
+                    "You are an OCR engine for Spanish industrial forms. " +
+                    "Return only the extracted text. No labels, no quotes, no explanation. " +
+                    "If the field is empty or unreadable, return an empty string."
+            },
+            {
+                role: "user",
+                content: [
+                    {
+                        type: "text",
+                        text: hint
+                    },
+                    {
+                        type: "image_url",
+                        image_url: {
+                            url: `data:image/png;base64,${base64}`,
+                            detail: "high"
+                        }
+                    }
+                ]
+            }
+        ]
     });
 
-    return worker;
-}
-
-async function ocrMat(worker, mat) {
-    const buffer = matToPng(mat);
-
-    const {
-        data: { text }
-    } = await worker.recognize(buffer);
+    const text = response.choices?.[0]?.message?.content || "";
 
     return cleanOcrText(text);
 }
@@ -370,7 +423,7 @@ async function ocrMat(worker, mat) {
 // Main document processing
 // -----------------------------------------------------------------------------
 
-async function processDocument(inputBuffer, worker) {
+async function processDocument(inputBuffer) {
     if (!fs.existsSync(TEMPLATE_PATH)) {
         throw new Error(
             `Template file not found: ${TEMPLATE_PATH}`
@@ -388,7 +441,7 @@ async function processDocument(inputBuffer, worker) {
     // 2. BFMatcher
     // 3. RANSAC homography
     // 4. Warp
-    // 5. Binary threshold
+    // 5. Binary threshold (checkboxes only)
     //
     const H = findHomography(
         template.gray,
@@ -425,77 +478,77 @@ async function processDocument(inputBuffer, worker) {
     );
 
     // -------------------------------------------------------------------------
-    // OCR clips
+    // OCR clips (grayscale is better for Vision than binary)
     // -------------------------------------------------------------------------
 
-    const ocr = {};
+    const ocrEntries = await Promise.all(
+        clips.map(async ([name, [x1, y1, x2, y2]]) => {
+            const clip = cropMat(
+                aligned,
+                x1,
+                y1,
+                x2,
+                y2
+            );
 
-    for (const [name, [x1, y1, x2, y2]] of clips) {
-        const clip = cropMat(
-            bw,
-            x1,
-            y1,
-            x2,
-            y2
-        );
+            const text = await ocrMat(clip, name);
 
-        ocr[name] = await ocrMat(
-            worker,
-            clip
-        );
-    }
+            return [name, text];
+        })
+    );
+
+    const ocr = Object.fromEntries(ocrEntries);
 
     // -------------------------------------------------------------------------
     // OCR quantity / kilogram fields
     // -------------------------------------------------------------------------
 
-    const quantities = [];
-    const kilograms = [];
+    const quantities = await Promise.all(
+        selectedMaterials.map(async (material) => {
+            const y = material.y;
 
-    for (let i = 0; i < selectedMaterials.length; i++) {
-        const material = selectedMaterials[i];
+            const cantidad = cropMat(
+                aligned,
+                cantidad_pos[0],
+                y - 34,
+                cantidad_pos[2],
+                y + 34
+            );
 
-        const y = material.y;
+            const cantidadText = await ocrMat(
+                cantidad,
+                "cantidad"
+            );
 
-        const cantidad = cropMat(
-            bw,
-            cantidad_pos[0],
-            y - 34,
-            cantidad_pos[2],
-            y + 34
-        );
+            return parseInteger(cantidadText);
+        })
+    );
 
-        const cantidadText = await ocrMat(
-            worker,
-            cantidad
-        );
+    const kilogramResults = await Promise.all(
+        Array.from({ length: 8 }, async (_, i) => {
+            const y = Math.floor(415 + 72.5 * (0.5 + i));
 
-        quantities.push(
-            parseInteger(cantidadText)
-        );
-    }
+            const kg = cropMat(
+                aligned,
+                kg_pos[0],
+                y - 34,
+                kg_pos[2],
+                y + 34
+            );
 
-    for (let i = 0; i < 8; i++) {
-        y = Math.floor(415 + 72.5 * (0.5 + i));
+            const kgText = await ocrMat(kg, "kg");
 
-        const kg = cropMat(
-            bw,
-            kg_pos[0],
-            y - 34,
-            kg_pos[2],
-            y + 34
-        );
+            if (!kgText) {
+                return null;
+            }
 
-        const kgText = await ocrMat(
-            worker,
-            kg
-        );
+            return parseInteger(kgText);
+        })
+    );
 
-        if (!kgText || kgText.trim() == "")
-            continue;
-
-        kilograms.push(parseInteger(kgText));
-    }
+    const kilograms = kilogramResults.filter(
+        (value) => value !== null
+    );
 
     // -------------------------------------------------------------------------
     // Construct result matching schema.json
@@ -611,8 +664,7 @@ app.post("/process", async (req, res) => {
         }
 
         const result = await processDocument(
-            inputBuffer,
-            app.locals.ocrWorker
+            inputBuffer
         );
 
         return res.json(result);
@@ -631,10 +683,15 @@ app.post("/process", async (req, res) => {
 // -----------------------------------------------------------------------------
 
 async function start() {
-    console.log("Initializing OCR...");
+    if (!OPENAI_API_KEY) {
+        throw new Error(
+            "OPENAI_API_KEY environment variable is required"
+        );
+    }
 
-    app.locals.ocrWorker =
-        await createOcrWorker();
+    console.log(
+        `Using OpenAI Vision model: ${OPENAI_MODEL}`
+    );
 
     app.listen(PORT, () => {
         console.log(
@@ -645,11 +702,6 @@ async function start() {
 
 async function shutdown() {
     console.log("Shutting down...");
-
-    if (app.locals.ocrWorker) {
-        await app.locals.ocrWorker.terminate();
-    }
-
     process.exit(0);
 }
 

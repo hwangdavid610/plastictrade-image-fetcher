@@ -655,14 +655,21 @@ async function processDocument(inputBuffer) {
     // Construct result matching schema.json
     // -------------------------------------------------------------------------
 
-    const materialsResult = selectedMaterials.map(
-        (material, index) => ({
-            material: material.name,
-            cantidad: materialFields[index].cantidad,
-            unidad: selectedUdms[index]?.name ?? null,
-            kilogramos: materialFields[index].kilogramos
+    // Only selected materials with a detected cantidad.
+    const materialsResult = selectedMaterials
+        .map((material, index) => {
+            const udm = selectedUdms.find(
+                (item) => Math.abs(item.y - material.y) <= 40
+            );
+
+            return {
+                material: material.name,
+                cantidad: materialFields[index].cantidad,
+                unidad: udm?.name ?? null,
+                kilogramos: materialFields[index].kilogramos
+            };
         })
-    );
+        .filter((item) => item.cantidad !== null);
 
     const result = {
         documento: {

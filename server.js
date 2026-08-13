@@ -512,8 +512,8 @@ async function extractDocumentWithVision(imageBuffer) {
                     "Return JSON only with this exact shape:\n" +
                     "{\n" +
                     '  "documento": {"sitio": string|null, "folio": string|null, "fecha": "YYYY-MM-DD"|null},\n' +
-                    '  "logistica": string|null,\n' +
-                    '  "materials": [{"material": string, "cantidad": number|null, "unidad": string|null, "kilogramos": number|null}],\n' +
+                    '  "selected_logistica": string|null,\n' +
+                    '  "materials": [{"material": string, "cantidad": number|null, "unidad": string|null}],\n' +
                     '  "selected_unidad": string|null,\n' +
                     '  "operador": {\n' +
                     '    "id_operador": string|null,\n' +
@@ -527,16 +527,14 @@ async function extractDocumentWithVision(imageBuffer) {
                     '    "elaboro": {"filled": boolean, "value": string|null},\n' +
                     '    "supervisor": {"filled": boolean, "value": string|null},\n' +
                     '    "autorizo": {"filled": boolean, "value": string|null},\n' +
-                    '    "operador": {"filled": boolean, "value": string|null},\n' +
-                    '    "recibio_cliente": {"filled": boolean, "value": string|null}\n' +
+                    '    "operador": {"filled": boolean, "value": string|null}\n' +
                     "  }\n" +
                     "}\n" +
                     "Rules:\n" +
                     "- Only include materials whose checkbox is selected AND that have a numeric UNIDAD value.\n" +
                     "- Material names: Playo, Carton, RSU, Tarima, Tubo de carton, Organicos, Chatarra, Otro.\n" +
                     "- unidad is the selected UNIDAD DE MEDIDA (A granel, Pacas, Gaylord's, Barcinas, Piezas).\n" +
-                    "- kilogramos must equal cantidad (same UNIDAD number).\n" +
-                    "- logistica: look ONLY at which LOGÍSTICA radio circle is filled black. " +
+                    "- selected_logistica: look ONLY at which LOGÍSTICA radio circle is filled black. " +
                     "Options in order: TAGA, SERRANO, JUAN CARLOS, TREESEVER, ROSSET, PLASTIC, BIOAMBIENTALISTIK. " +
                     "Return that exact selected name. Do not guess from nearby text.\n" +
                     "- selected_unidad is the selected transport unit (e.g. Caja seca).\n" +
@@ -577,15 +575,12 @@ function normalizeExtractedDocument(raw, overrides = {}) {
     const materials = Array.isArray(raw?.materials)
         ? raw.materials
             .map((item) => {
-                const cantidad = parseInteger(
-                    item?.cantidad ?? item?.kilogramos
-                );
+                const cantidad = parseInteger(item?.cantidad);
 
                 return {
                     material: cleanOcrText(item?.material) || null,
                     cantidad,
-                    unidad: cleanOcrText(item?.unidad) || null,
-                    kilogramos: cantidad
+                    unidad: cleanOcrText(item?.unidad) || null
                 };
             })
             .filter(
@@ -597,8 +592,9 @@ function normalizeExtractedDocument(raw, overrides = {}) {
         : [];
 
     const firmasRaw = raw?.firmas || {};
-    const logistica =
+    const selectedLogistica =
         overrides.logistica ||
+        cleanOcrText(raw?.selected_logistica) ||
         cleanOcrText(raw?.logistica) ||
         null;
 
@@ -617,7 +613,7 @@ function normalizeExtractedDocument(raw, overrides = {}) {
                 fields.fecha || raw?.documento?.fecha
             )
         },
-        logistica,
+        selected_logistica: selectedLogistica,
         materials,
         selected_unidad:
             cleanOcrText(raw?.selected_unidad) || null,
@@ -666,10 +662,7 @@ function normalizeExtractedDocument(raw, overrides = {}) {
                 : normalizeFirmaResult(firmasRaw.autorizo),
             operador: fields.operador_firma
                 ? firmaFromText(fields.operador_firma)
-                : normalizeFirmaResult(firmasRaw.operador),
-            recibio_cliente: normalizeFirmaResult(
-                firmasRaw.recibio_cliente
-            )
+                : normalizeFirmaResult(firmasRaw.operador)
         }
     };
 }

@@ -17,7 +17,7 @@ ENV OPENCV4NODEJS_DISABLE_AUTOBUILD=1
 
 RUN npm install --omit=dev
 
-COPY server.js template.jpg ./
+COPY server.js new_template.jpg ./
 
 ENV NODE_ENV=production
 ENV PORT=3000

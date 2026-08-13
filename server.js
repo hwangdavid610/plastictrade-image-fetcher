@@ -28,14 +28,35 @@ app.get("/health", (_req, res) => {
 });
 
 
-const TEMPLATE_PATH = path.join(__dirname, "template.jpg");
+const TEMPLATE_PATH = path.join(__dirname, "new_template.jpg");
 
-const TARGET_W = 2100;
-const TARGET_H = 1650;
+// Native size of new_template.jpg
+const TARGET_W = 1116;
+const TARGET_H = 722;
 
 // -----------------------------------------------------------------------------
-// Document configuration
+// Document configuration (new_template.jpg)
 // -----------------------------------------------------------------------------
+
+const logisticas = [
+    "TAGA",
+    "SERRANO",
+    "JUAN CARLOS",
+    "TREESEVER",
+    "ROSSET",
+    "PLASTIC",
+    "BIOAMBIENTALISTIK"
+];
+
+const logisticas_cp = [
+    [83, 236],
+    [216, 236],
+    [349, 236],
+    [482, 236],
+    [615, 236],
+    [748, 236],
+    [859, 236]
+];
 
 const materials = [
     "Playo",
@@ -44,17 +65,19 @@ const materials = [
     "Tarima",
     "Tubo de carton",
     "Organicos",
-    "Chatarra"
+    "Chatarra",
+    "Otro"
 ];
 
 const materials_cp = [
-    [104, 454],
-    [104, 533],
-    [104, 601],
-    [104, 676],
-    [104, 748],
-    [104, 823],
-    [104, 897]
+    [46, 289],
+    [46, 320],
+    [46, 351],
+    [46, 382],
+    [46, 413],
+    [46, 444],
+    [46, 475],
+    [46, 506]
 ];
 
 const udms = [
@@ -69,31 +92,32 @@ const udms = [
     "Piezas",
     "A granel",
     "A granel",
-    "Agranel",
+    "A granel",
     "Pacas",
     "Gaylord's",
     "Barcinas"
 ];
 
 const udms_cp = [
-    [755, 452],
-    [896, 452],
-    [1013, 452],
-    [1166, 452],
-    [845, 525],
-    [1035, 525],
-    [951, 599],
-    [960, 674],
-    [960, 747],
-    [951, 817],
-    [951, 891],
-    [755, 966],
-    [896, 966],
-    [1011, 966],
-    [1162, 966]
+    [530, 289],
+    [613, 289],
+    [683, 289],
+    [755, 289],
+    [592, 320],
+    [704, 320],
+    [654, 351],
+    [649, 382],
+    [649, 413],
+    [663, 444],
+    [663, 475],
+    [530, 506],
+    [571, 506],
+    [663, 506],
+    [755, 506]
 ];
 
-const cantidad_pos = [549, 496, 720, 558];
+// UNIDAD number column on each material row.
+const cantidad_pos = [300, 0, 410, 0];
 
 const unidads = [
     "Caja seca",
@@ -108,43 +132,37 @@ const unidads = [
 ];
 
 const unidads_cp = [
-    [1329, 460],
-    [1329, 524],
-    [1329, 586],
-    [1328, 648],
-    [1328, 710],
-    [1328, 772],
-    [1327, 834],
-    [1327, 896],
-    [1327, 961]
+    [754, 265],
+    [754, 289],
+    [754, 313],
+    [754, 337],
+    [754, 361],
+    [754, 385],
+    [754, 409],
+    [754, 433],
+    [754, 457]
 ];
-
-const kg_pos = [1637, 419, 1943, 484];
 
 const clips = [
-    ["sitio", [1277, 185, 1615, 283]],
-    ["folio", [1635, 185, 1993, 280]],
-    ["fecha", [1434, 302, 1995, 359]],
+    ["sitio", [720, 70, 900, 115]],
+    ["folio", [910, 70, 1095, 115]],
+    ["fecha", [910, 140, 1095, 195]],
 
-    ["oper1", [71, 1054, 490, 1151]],
-    ["oper2", [496, 1054, 780, 1151]],
-    ["oper3", [790, 1054, 1180, 1151]],
-    ["oper4", [1190, 1054, 1580, 1151]],
-    ["oper5", [1590, 1054, 1990, 1151]],
+    ["hora_entrada", [30, 548, 280, 585]],
+    ["hora_salida", [290, 548, 540, 585]],
+    ["id_operador", [550, 548, 800, 585]],
+    ["nombre", [810, 548, 1095, 585]],
 
-    ["time11", [515, 1201, 1025, 1250]],
-    ["time12", [515, 1250, 1025, 1312]],
-    ["time21", [1526, 1201, 1990, 1250]],
-    ["time22", [1526, 1250, 1990, 1312]]
+    ["placas_vehiculo", [30, 615, 370, 655]],
+    ["placas_caja_remolque", [380, 615, 740, 655]],
+    ["numero_marchamo", [750, 615, 1095, 655]]
 ];
 
-// Signature boxes at the bottom of the aligned template (2100x1650).
 const firmaClips = [
-    ["elaboro_plastict", [60, 1345, 450, 1610]],
-    ["responsable_supervisor", [450, 1345, 840, 1610]],
-    ["autoriza_melii", [840, 1345, 1230, 1610]],
-    ["recibio_y_entrego_operador", [1230, 1345, 1620, 1610]],
-    ["recibio_cliente", [1620, 1345, 2010, 1610]]
+    ["elaboro", [30, 670, 290, 715]],
+    ["supervisor", [300, 670, 560, 715]],
+    ["autorizo", [570, 670, 830, 715]],
+    ["operador", [840, 670, 1095, 715]]
 ];
 
 // -----------------------------------------------------------------------------
@@ -368,20 +386,17 @@ function matToPng(mat) {
 // -----------------------------------------------------------------------------
 
 const FIELD_HINTS = {
-    sitio: "Extract the site/location name written in this box.",
-    folio: "Extract the folio/document number. Digits only if possible.",
+    sitio: "Extract the site/location code in this box.",
+    folio: "Extract the folio/document number. Digits preferred.",
     fecha: "Extract the date. Prefer YYYY-MM-DD or DD/MM/YYYY.",
-    oper1: "Extract the operator full name.",
-    oper2: "Extract the operator ID.",
-    oper3: "Extract the vehicle license plate.",
-    oper4: "Extract the trailer/box license plate.",
-    oper5: "Extract the seal/marchamo number. Digits preferred.",
-    time11: "Extract the date and time of site entry.",
-    time12: "Extract the date and time of site exit.",
-    time21: "Extract the date and time of warehouse entry.",
-    time22: "Extract the date and time of warehouse exit.",
-    cantidad: "Extract the quantity as an integer number only.",
-    kg: "Extract the kilograms as an integer number only."
+    hora_entrada: "Extract the entry date and time.",
+    hora_salida: "Extract the exit date and time.",
+    id_operador: "Extract the operator ID.",
+    nombre: "Extract the operator full name.",
+    placas_vehiculo: "Extract the vehicle license plate.",
+    placas_caja_remolque: "Extract the trailer/box license plate.",
+    numero_marchamo: "Extract the seal/marchamo number. Digits preferred.",
+    cantidad: "Extract the quantity/unidad number as an integer only."
 };
 
 async function ocrMat(mat, fieldName = "text") {
@@ -555,6 +570,12 @@ async function processDocument(inputBuffer) {
     // Checkbox detection
     // -------------------------------------------------------------------------
 
+    const selectedLogistica = findCP(
+        bw,
+        logisticas_cp,
+        logisticas
+    );
+
     const selectedMaterials = findCP(
         bw,
         materials_cp,
@@ -618,7 +639,7 @@ async function processDocument(inputBuffer) {
     const firmas = Object.fromEntries(firmaEntries);
 
     // -------------------------------------------------------------------------
-    // OCR quantity / kilogram fields (same row as each selected material)
+    // OCR UNIDAD number for each selected material row
     // -------------------------------------------------------------------------
 
     const materialFields = await Promise.all(
@@ -628,47 +649,38 @@ async function processDocument(inputBuffer) {
             const cantidad = cropMat(
                 aligned,
                 cantidad_pos[0],
-                y - 34,
+                y - 16,
                 cantidad_pos[2],
-                y + 34
+                y + 16
             );
 
-            const kg = cropMat(
-                aligned,
-                kg_pos[0],
-                y - 34,
-                kg_pos[2],
-                y + 34
+            const cantidadText = await ocrMat(
+                cantidad,
+                "cantidad"
             );
-
-            const [cantidadText, kgText] = await Promise.all([
-                ocrMat(cantidad, "cantidad"),
-                ocrMat(kg, "kg")
-            ]);
 
             return {
-                cantidad: parseInteger(cantidadText),
-                kilogramos: parseInteger(kgText)
+                cantidad: parseInteger(cantidadText)
             };
         })
     );
 
     // -------------------------------------------------------------------------
-    // Construct result matching schema.json
+    // Construct result
     // -------------------------------------------------------------------------
 
     // Only selected materials with a detected cantidad.
     const materialsResult = selectedMaterials
         .map((material, index) => {
             const udm = selectedUdms.find(
-                (item) => Math.abs(item.y - material.y) <= 40
+                (item) => Math.abs(item.y - material.y) <= 20
             );
 
             return {
                 material: material.name,
                 cantidad: materialFields[index].cantidad,
                 unidad: udm?.name ?? null,
-                kilogramos: materialFields[index].kilogramos
+                kilogramos: materialFields[index].cantidad
             };
         })
         .filter((item) => item.cantidad !== null);
@@ -680,33 +692,24 @@ async function processDocument(inputBuffer) {
             fecha: parseDate(ocr.fecha)
         },
 
+        logistica: selectedLogistica[0]?.name ?? null,
+
         materials: materialsResult,
 
         selected_unidad:
             selectedUnidad[0]?.name ?? null,
 
         operador: {
-            nombre: ocr.oper1,
-            id_operador: ocr.oper2,
-            placas_vehiculo: ocr.oper3,
-            placas_caja_remolque: ocr.oper4,
-            numero_marchamo: ocr.oper5
+            id_operador: ocr.id_operador,
+            nombre: ocr.nombre,
+            placas_vehiculo: ocr.placas_vehiculo,
+            placas_caja_remolque: ocr.placas_caja_remolque,
+            numero_marchamo: ocr.numero_marchamo
         },
 
-        cliente_de_servicio: {
-            fecha_hora_entrada_sitio:
-                parseDateTime(ocr.time11),
-
-            fecha_hora_salida_sitio:
-                parseDateTime(ocr.time12)
-        },
-
-        almacen_de_descarga: {
-            fecha_hora_entrada_almacen:
-                parseDateTime(ocr.time21),
-
-            fecha_hora_salida_almacen:
-                parseDateTime(ocr.time22)
+        horarios: {
+            hora_entrada: parseDateTime(ocr.hora_entrada),
+            hora_salida: parseDateTime(ocr.hora_salida)
         },
 
         firmas

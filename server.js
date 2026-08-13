@@ -571,7 +571,27 @@ async function extractDocumentWithVision(imageBuffer) {
     }
 }
 
-function normalizeExtractedDocument(raw, overrides = {}) {
+function pickFirma(fields, firmasRaw, cropKey, ...visionKeys) {
+    if (fields?.[cropKey]) {
+        return firmaFromText(fields[cropKey]);
+    }
+
+    for (const key of visionKeys) {
+        if (firmasRaw?.[key]) {
+            return normalizeFirmaResult(firmasRaw[key]);
+        }
+    }
+
+    return {
+        filled: false,
+        value: null
+    };
+}
+
+function buildResponse(raw, overrides = {}) {
+    const fields = overrides.fields || {};
+    const firmasRaw = raw?.firmas || {};
+
     const materials = Array.isArray(raw?.materials)
         ? raw.materials
             .map((item) => {
@@ -591,15 +611,7 @@ function normalizeExtractedDocument(raw, overrides = {}) {
             )
         : [];
 
-    const firmasRaw = raw?.firmas || {};
-    const selectedLogistica =
-        overrides.logistica ||
-        cleanOcrText(raw?.selected_logistica) ||
-        cleanOcrText(raw?.logistica) ||
-        null;
-
-    const fields = overrides.fields || {};
-
+    // Strict whitelist — never pass through raw Vision / legacy keys.
     return {
         documento: {
             sitio:
@@ -613,7 +625,11 @@ function normalizeExtractedDocument(raw, overrides = {}) {
                 fields.fecha || raw?.documento?.fecha
             )
         },
-        selected_logistica: selectedLogistica,
+        selected_logistica:
+            overrides.logistica ||
+            cleanOcrText(raw?.selected_logistica) ||
+            cleanOcrText(raw?.logistica) ||
+            null,
         materials,
         selected_unidad:
             cleanOcrText(raw?.selected_unidad) || null,
@@ -644,25 +660,46 @@ function normalizeExtractedDocument(raw, overrides = {}) {
         horarios: {
             hora_entrada: parseDateTime(
                 fields.hora_entrada ||
-                    raw?.horarios?.hora_entrada
+                    raw?.horarios?.hora_entrada ||
+                    raw?.cliente_de_servicio
+                        ?.fecha_hora_entrada_sitio
             ),
             hora_salida: parseDateTime(
-                fields.hora_salida || raw?.horarios?.hora_salida
+                fields.hora_salida ||
+                    raw?.horarios?.hora_salida ||
+                    raw?.cliente_de_servicio
+                        ?.fecha_hora_salida_sitio
             )
         },
         firmas: {
-            elaboro: fields.elaboro
-                ? firmaFromText(fields.elaboro)
-                : normalizeFirmaResult(firmasRaw.elaboro),
-            supervisor: fields.supervisor
-                ? firmaFromText(fields.supervisor)
-                : normalizeFirmaResult(firmasRaw.supervisor),
-            autorizo: fields.autorizo
-                ? firmaFromText(fields.autorizo)
-                : normalizeFirmaResult(firmasRaw.autorizo),
-            operador: fields.operador_firma
-                ? firmaFromText(fields.operador_firma)
-                : normalizeFirmaResult(firmasRaw.operador)
+            elaboro: pickFirma(
+                fields,
+                firmasRaw,
+                "elaboro",
+                "elaboro",
+                "elaboro_plastict"
+            ),
+            supervisor: pickFirma(
+                fields,
+                firmasRaw,
+                "supervisor",
+                "supervisor",
+                "responsable_supervisor"
+            ),
+            autorizo: pickFirma(
+                fields,
+                firmasRaw,
+                "autorizo",
+                "autorizo",
+                "autoriza_melii"
+            ),
+            operador: pickFirma(
+                fields,
+                firmasRaw,
+                "operador_firma",
+                "operador",
+                "recibio_y_entrego_operador"
+            )
         }
     };
 }
@@ -728,7 +765,7 @@ async function processDocument(inputBuffer) {
     const jpegBuffer = matToJpeg(imageForOcr);
     const extracted = await extractDocumentWithVision(jpegBuffer);
 
-    return normalizeExtractedDocument(extracted, {
+    return buildResponse(extracted, {
         logistica: logisticaOverride,
         fields: fieldOverride
     });

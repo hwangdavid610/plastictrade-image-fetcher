@@ -404,56 +404,82 @@ function firmaFromText(text) {
     };
 }
 
-function checkboxDarkness(gray, x, y, radius = 7) {
-    let sum = 0;
-    let count = 0;
+function sampleGray(gray, x, y) {
+    if (
+        x < 0 ||
+        y < 0 ||
+        x >= gray.cols ||
+        y >= gray.rows
+    ) {
+        return null;
+    }
 
-    for (let dy = -radius; dy <= radius; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
-            if (dx * dx + dy * dy > radius * radius) {
+    return gray.at(y, x);
+}
+
+// Filled radio = dark center + lighter ring. Avoids nearby text (e.g. PLASTIC).
+function filledCircleScore(gray, x, y) {
+    let coreSum = 0;
+    let coreCount = 0;
+    let ringSum = 0;
+    let ringCount = 0;
+
+    for (let dy = -8; dy <= 8; dy++) {
+        for (let dx = -8; dx <= 8; dx++) {
+            const dist2 = dx * dx + dy * dy;
+            const value = sampleGray(gray, x + dx, y + dy);
+
+            if (value == null) {
                 continue;
             }
 
-            const px = x + dx;
-            const py = y + dy;
-
-            if (
-                px < 0 ||
-                py < 0 ||
-                px >= gray.cols ||
-                py >= gray.rows
-            ) {
-                continue;
+            if (dist2 <= 9) {
+                // r <= 3
+                coreSum += value;
+                coreCount += 1;
+            } else if (dist2 >= 25 && dist2 <= 64) {
+                // 5 <= r <= 8
+                ringSum += value;
+                ringCount += 1;
             }
-
-            sum += gray.at(py, px);
-            count += 1;
         }
     }
 
-    return count ? sum / count : 255;
+    if (!coreCount || !ringCount) {
+        return null;
+    }
+
+    const core = coreSum / coreCount;
+    const ring = ringSum / ringCount;
+    const contrast = ring - core;
+
+    // Require a real filled-dot signature.
+    if (core > 95 || contrast < 50 || ring < 150) {
+        return null;
+    }
+
+    return {
+        core,
+        ring,
+        contrast
+    };
 }
 
-function detectSelectedOption(
-    gray,
-    positions,
-    names,
-    maxMean = 115
-) {
+function detectSelectedOption(gray, positions, names) {
     let best = null;
 
     for (let i = 0; i < positions.length; i++) {
         const [x, y] = positions[i];
-        const score = checkboxDarkness(gray, x, y);
+        const score = filledCircleScore(gray, x, y);
 
-        if (score > maxMean) {
+        if (!score) {
             continue;
         }
 
-        if (!best || score < best.score) {
+        if (!best || score.core < best.core) {
             best = {
                 name: names[i],
-                score
+                ...score
             };
         }
     }

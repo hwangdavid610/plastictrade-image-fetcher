@@ -42,13 +42,38 @@ const logisticas = [
 ];
 
 const logisticas_cp = [
-    [83, 236],
-    [216, 236],
-    [349, 236],
-    [482, 236],
-    [615, 236],
-    [748, 236],
-    [859, 236]
+    [84, 232],
+    [221, 236],
+    [347, 236],
+    [496, 236],
+    [635, 235],
+    [749, 237],
+    [868, 236]
+];
+
+// UNIDAD DE TRANSPORTE radio buttons (right column)
+const unidads = [
+    "Caja seca",
+    "Tolva 30m3",
+    "Remolque",
+    "Torthon",
+    "Cartucho",
+    "Olla 17m3",
+    "Camioneta",
+    "Tolva 7m3",
+    "Contenedores CGR"
+];
+
+const unidads_cp = [
+    [936, 293],
+    [934, 318],
+    [938, 344],
+    [936, 370],
+    [938, 395],
+    [934, 421],
+    [938, 447],
+    [937, 475],
+    [939, 499]
 ];
 
 // Value boxes on aligned new_template.jpg
@@ -97,12 +122,30 @@ function cleanOcrText(text) {
         return "";
     }
 
-    return String(text)
+    let cleaned = String(text)
         .replace(/\r/g, "")
         .replace(/\n+/g, " ")
         .replace(/`+/g, "")
+        .replace(/^["'\s]+|["'\s]+$/g, "")
         .replace(/\s+/g, " ")
         .trim();
+
+    // Vision/OCR sometimes apologizes on blank crops instead of returning "".
+    if (
+        !cleaned ||
+        cleaned === '""' ||
+        cleaned === "''" ||
+        /i'?m sorry/i.test(cleaned) ||
+        /can'?t (extract|read|help)/i.test(cleaned) ||
+        /unable to (extract|read|determine)/i.test(cleaned) ||
+        /no text/i.test(cleaned) ||
+        /blank or unreadable/i.test(cleaned) ||
+        /^(n\/?a|none|null|unknown)$/i.test(cleaned)
+    ) {
+        return "";
+    }
+
+    return cleaned;
 }
 
 function parseInteger(text) {
@@ -186,7 +229,6 @@ function cleanFolio(text) {
 }
 
 function normalizeFirmaResult(raw) {
-    const filled = Boolean(raw?.filled);
     let value = raw?.value;
 
     if (typeof value === "string") {
@@ -195,13 +237,15 @@ function normalizeFirmaResult(raw) {
         value = null;
     }
 
+    const filled = Boolean(raw?.filled) && Boolean(value);
+
     if (!filled) {
         return { filled: false, value: null };
     }
 
     return {
         filled: true,
-        value: value || "Unknown"
+        value
     };
 }
 
@@ -324,9 +368,46 @@ function cropMat(img, x1, y1, x2, y2) {
     );
 }
 
+function clipLooksBlank(mat) {
+    try {
+        const gray =
+            mat.channels === 1
+                ? mat
+                : mat.cvtColor(cv.COLOR_BGR2GRAY);
+        const data = gray.getDataAsArray();
+        let dark = 0;
+        let total = 0;
+        let sum = 0;
+
+        for (const row of data) {
+            for (const value of row) {
+                total += 1;
+                sum += value;
+
+                if (value < 140) {
+                    dark += 1;
+                }
+            }
+        }
+
+        if (!total) {
+            return true;
+        }
+
+        // Mostly white paper with almost no ink strokes.
+        return sum / total > 200 && dark / total < 0.02;
+    } catch {
+        return false;
+    }
+}
+
 async function ocrClip(mat, fieldName) {
     if (!OPENAI_API_KEY) {
         throw new Error("OPENAI_API_KEY is not configured");
+    }
+
+    if (clipLooksBlank(mat)) {
+        return "";
     }
 
     const buffer = matToPng(mat);
@@ -344,8 +425,8 @@ async function ocrClip(mat, fieldName) {
                 role: "system",
                 content:
                     "You are an OCR engine. Return only the extracted text. " +
-                    "No labels, no quotes, no explanation. " +
-                    "If empty or unreadable, return an empty string."
+                    "No labels, no quotes, no explanation, no apologies. " +
+                    "If the box is blank or unreadable, return an empty string and nothing else."
             },
             {
                 role: "user",
@@ -453,8 +534,9 @@ function filledCircleScore(gray, x, y) {
     const ring = ringSum / ringCount;
     const contrast = ring - core;
 
-    // Require a real filled-dot signature.
-    if (core > 95 || contrast < 50 || ring < 150) {
+    // Blurry phone photos often darken the ring (~100-130), so do not
+    // require a bright white ring. Require a dark core + positive contrast.
+    if (core > 45 || contrast < 50) {
         return null;
     }
 
@@ -465,12 +547,36 @@ function filledCircleScore(gray, x, y) {
     };
 }
 
+function bestFilledNear(gray, x, y, radius = 8) {
+    let best = null;
+
+    for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+            const score = filledCircleScore(gray, x + dx, y + dy);
+
+            if (!score) {
+                continue;
+            }
+
+            if (!best || score.core < best.core) {
+                best = {
+                    ...score,
+                    x: x + dx,
+                    y: y + dy
+                };
+            }
+        }
+    }
+
+    return best;
+}
+
 function detectSelectedOption(gray, positions, names) {
     let best = null;
 
     for (let i = 0; i < positions.length; i++) {
         const [x, y] = positions[i];
-        const score = filledCircleScore(gray, x, y);
+        const score = bestFilledNear(gray, x, y, 8);
 
         if (!score) {
             continue;
@@ -563,11 +669,14 @@ async function extractDocumentWithVision(imageBuffer) {
                     "- selected_logistica: look ONLY at which LOGÍSTICA radio circle is filled black. " +
                     "Options in order: TAGA, SERRANO, JUAN CARLOS, TREESEVER, ROSSET, PLASTIC, BIOAMBIENTALISTIK. " +
                     "Return that exact selected name. Do not guess from nearby text.\n" +
-                    "- selected_unidad is the selected transport unit (e.g. Caja seca).\n" +
+                    "- selected_unidad: look ONLY at which UNIDAD DE TRANSPORTE radio circle is filled black. " +
+                    "Options in order: Caja seca, Tolva 30m3, Remolque, Torthon, Cartucho, Olla 17m3, Camioneta, Tolva 7m3, Contenedores CGR. " +
+                    "Return that exact selected name. Do not guess from nearby text.\n" +
                     "- folio: prefer digits only (N° 0001 -> 0001).\n" +
-                    "- horarios: keep date and time, prefer YYYY-MM-DD HH:mm.\n" +
+                    "- horarios: keep date and time, prefer YYYY-MM-DD HH:mm. Empty box => null.\n" +
+                    "- operador fields: empty box => null. Never apologize or explain.\n" +
                     "- firmas: filled=true if name/signature present; value=readable name or Unknown; empty box => filled=false, value=null.\n" +
-                    "- Read handwriting carefully (9 vs Y, 6 vs 0, 5 vs S). Do not invent values."
+                    "- Read handwriting carefully (9 vs Y, 6 vs 0, 5 vs S). Do not invent values. Never return apology text."
             },
             {
                 role: "user",
@@ -598,7 +707,7 @@ async function extractDocumentWithVision(imageBuffer) {
 }
 
 function pickFirma(fields, firmasRaw, cropKey, ...visionKeys) {
-    if (fields?.[cropKey]) {
+    if (Object.prototype.hasOwnProperty.call(fields || {}, cropKey)) {
         return firmaFromText(fields[cropKey]);
     }
 
@@ -658,7 +767,9 @@ function buildResponse(raw, overrides = {}) {
             null,
         materials,
         selected_unidad:
-            cleanOcrText(raw?.selected_unidad) || null,
+            overrides.unidad ||
+            cleanOcrText(raw?.selected_unidad) ||
+            null,
         operador: {
             id_operador:
                 cleanOcrText(fields.id_operador) ||
@@ -762,8 +873,9 @@ async function processDocument(inputBuffer) {
         imageForOcr = color;
     }
 
-    // Prefer OpenCV filled-circle detection for LOGÍSTICA.
+    // Prefer OpenCV filled-circle detection for LOGÍSTICA / UNIDAD.
     let logisticaOverride = null;
+    let unidadOverride = null;
 
     if (alignedGray) {
         logisticaOverride = detectSelectedOption(
@@ -776,6 +888,19 @@ async function processDocument(inputBuffer) {
             console.log(
                 "LOGÍSTICA detected by checkbox:",
                 logisticaOverride
+            );
+        }
+
+        unidadOverride = detectSelectedOption(
+            alignedGray,
+            unidads_cp,
+            unidads
+        );
+
+        if (unidadOverride) {
+            console.log(
+                "UNIDAD DE TRANSPORTE detected by checkbox:",
+                unidadOverride
             );
         }
     }
@@ -793,6 +918,7 @@ async function processDocument(inputBuffer) {
 
     return buildResponse(extracted, {
         logistica: logisticaOverride,
+        unidad: unidadOverride,
         fields: fieldOverride
     });
 }

@@ -17,7 +17,7 @@ ENV OPENCV4NODEJS_DISABLE_AUTOBUILD=1
 
 RUN npm install --omit=dev
 
-COPY server.js new_template.jpg ./
+COPY server.js new_template.jpg kilogram_template.png ./
 
 ENV NODE_ENV=production
 ENV PORT=3000

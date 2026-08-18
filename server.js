@@ -30,6 +30,13 @@ const TEMPLATE_PATH = path.join(__dirname, "new_template.jpg");
 const TARGET_W = 1116;
 const TARGET_H = 722;
 
+const KILOGRAM_TEMPLATE_PATH = path.join(
+    __dirname,
+    "kilogram_template.png"
+);
+const KILOGRAM_W = 313;
+const KILOGRAM_H = 733;
+
 // LOGÍSTICA radio buttons on aligned new_template.jpg
 const logisticas = [
     "TAGA",
@@ -166,6 +173,54 @@ function parseInteger(text) {
     return Number.parseInt(value, 10);
 }
 
+function parseWeight(text) {
+    if (text == null || text === "") {
+        return null;
+    }
+
+    if (typeof text === "number" && Number.isFinite(text)) {
+        return text;
+    }
+
+    let cleaned = cleanOcrText(text);
+
+    if (!cleaned) {
+        return null;
+    }
+
+    // Keep digits, comma, and dot. Examples: 20,060.00 / 20060.00 / 20.060,00
+    cleaned = cleaned.replace(/[^\d.,]/g, "");
+
+    if (!cleaned) {
+        return null;
+    }
+
+    const hasComma = cleaned.includes(",");
+    const hasDot = cleaned.includes(".");
+
+    if (hasComma && hasDot) {
+        // Assume the last separator is the decimal mark.
+        if (cleaned.lastIndexOf(",") > cleaned.lastIndexOf(".")) {
+            cleaned = cleaned.replace(/\./g, "").replace(",", ".");
+        } else {
+            cleaned = cleaned.replace(/,/g, "");
+        }
+    } else if (hasComma) {
+        // 20060,00 or 20,060
+        const parts = cleaned.split(",");
+
+        if (parts.length === 2 && parts[1].length <= 2) {
+            cleaned = `${parts[0]}.${parts[1]}`;
+        } else {
+            cleaned = cleaned.replace(/,/g, "");
+        }
+    }
+
+    const value = Number.parseFloat(cleaned);
+
+    return Number.isFinite(value) ? value : null;
+}
+
 function parseDate(text) {
     text = cleanOcrText(text);
 
@@ -268,12 +323,7 @@ function loadImage(imageBuffer) {
     return { color: img, gray };
 }
 
-function rotateToLandscape(mat) {
-    if (mat.cols >= mat.rows) {
-        return mat;
-    }
-
-    // 90° clockwise for portrait phone photos of landscape forms.
+function rotate90Clockwise(mat) {
     try {
         if (typeof cv.rotate === "function") {
             return cv.rotate(mat, 0); // ROTATE_90_CLOCKWISE
@@ -283,6 +333,24 @@ function rotateToLandscape(mat) {
     }
 
     return mat.transpose().flip(1);
+}
+
+function rotateToLandscape(mat) {
+    if (mat.cols >= mat.rows) {
+        return mat;
+    }
+
+    // 90° clockwise for portrait phone photos of landscape forms.
+    return rotate90Clockwise(mat);
+}
+
+function rotateToPortrait(mat) {
+    if (mat.rows >= mat.cols) {
+        return mat;
+    }
+
+    // Thermal receipts are portrait; landscape photos are usually sideways.
+    return rotate90Clockwise(mat);
 }
 
 function findHomography(templateGray, inputGray) {
@@ -335,10 +403,10 @@ function findHomography(templateGray, inputGray) {
     return result.homography;
 }
 
-function warpImage(img, H) {
+function warpImage(img, H, width = TARGET_W, height = TARGET_H) {
     return img.warpPerspective(
         H,
-        new cv.Size(TARGET_W, TARGET_H),
+        new cv.Size(width, height),
         cv.INTER_LINEAR,
         cv.BORDER_CONSTANT,
         new cv.Vec3(255, 255, 255)
@@ -593,13 +661,23 @@ function detectSelectedOption(gray, positions, names) {
     return best?.name ?? null;
 }
 
-function alignDocument(inputBuffer) {
-    const templateBuffer = fs.readFileSync(TEMPLATE_PATH);
+function alignDocument(
+    inputBuffer,
+    {
+        templatePath = TEMPLATE_PATH,
+        width = TARGET_W,
+        height = TARGET_H,
+        orientation = "landscape"
+    } = {}
+) {
+    const templateBuffer = fs.readFileSync(templatePath);
     const template = loadImage(templateBuffer);
     let { color } = loadImage(inputBuffer);
 
-    // Phone photos are often portrait while the form is landscape.
-    color = rotateToLandscape(color);
+    color =
+        orientation === "portrait"
+            ? rotateToPortrait(color)
+            : rotateToLandscape(color);
 
     const gray =
         color.channels === 1
@@ -607,7 +685,7 @@ function alignDocument(inputBuffer) {
             : color.cvtColor(cv.COLOR_BGR2GRAY);
 
     const H = findHomography(template.gray, gray);
-    const alignedColor = warpImage(color, H);
+    const alignedColor = warpImage(color, H, width, height);
     const alignedGray =
         alignedColor.channels === 1
             ? alignedColor
@@ -924,16 +1002,157 @@ async function processDocument(inputBuffer) {
 }
 
 // -----------------------------------------------------------------------------
+// Kilogram receipt (NOTA DE ENTRADA) processing
+// -----------------------------------------------------------------------------
+
+async function extractKilogramWithVision(imageBuffer) {
+    if (!OPENAI_API_KEY) {
+        throw new Error("OPENAI_API_KEY is not configured");
+    }
+
+    const base64 = imageBuffer.toString("base64");
+
+    const response = await openai.chat.completions.create({
+        model: OPENAI_MODEL,
+        temperature: 0,
+        max_tokens: 300,
+        response_format: { type: "json_object" },
+        messages: [
+            {
+                role: "system",
+                content:
+                    "You extract weight values from Recicladora TAGA NOTA DE ENTRADA receipts. " +
+                    "Return JSON only with this exact shape:\n" +
+                    "{\n" +
+                    '  "bruto": number|null,\n' +
+                    '  "tara": number|null,\n' +
+                    '  "neto": number|null\n' +
+                    "}\n" +
+                    "Rules:\n" +
+                    "- Read only the numeric values next to BRUTO, TARA, and NETO.\n" +
+                    "- Return plain numbers (e.g. 20060 or 20060.00), not currency strings.\n" +
+                    "- Ignore COSTO, TOTAL, ticket numbers, and dates.\n" +
+                    "- If a value is missing or unreadable, return null.\n" +
+                    "- Do not invent values. Never apologize."
+            },
+            {
+                role: "user",
+                content: [
+                    {
+                        type: "text",
+                        text: "Extract BRUTO, TARA, and NETO from this NOTA DE ENTRADA image."
+                    },
+                    {
+                        type: "image_url",
+                        image_url: {
+                            url: `data:image/jpeg;base64,${base64}`,
+                            detail: "high"
+                        }
+                    }
+                ]
+            }
+        ]
+    });
+
+    const text = response.choices?.[0]?.message?.content || "{}";
+
+    try {
+        return JSON.parse(text);
+    } catch {
+        throw new Error(
+            "OpenAI returned invalid JSON for kilogram extraction"
+        );
+    }
+}
+
+function buildKilogramResponse(raw) {
+    return {
+        bruto: parseWeight(raw?.bruto),
+        tara: parseWeight(raw?.tara),
+        neto: parseWeight(raw?.neto)
+    };
+}
+
+async function processKilogramDocument(inputBuffer) {
+    if (!fs.existsSync(KILOGRAM_TEMPLATE_PATH)) {
+        throw new Error(
+            `Template file not found: ${KILOGRAM_TEMPLATE_PATH}`
+        );
+    }
+
+    let imageForOcr;
+
+    try {
+        const aligned = alignDocument(inputBuffer, {
+            templatePath: KILOGRAM_TEMPLATE_PATH,
+            width: KILOGRAM_W,
+            height: KILOGRAM_H,
+            orientation: "portrait"
+        });
+        imageForOcr = aligned.color;
+        console.log("Kilogram receipt aligned to template");
+    } catch (error) {
+        console.warn(
+            "Kilogram alignment failed, using orientation-normalized original:",
+            error.message
+        );
+
+        let { color } = loadImage(inputBuffer);
+        color = rotateToPortrait(color);
+        imageForOcr = color;
+    }
+
+    const jpegBuffer = matToJpeg(imageForOcr);
+    const extracted = await extractKilogramWithVision(jpegBuffer);
+
+    return buildKilogramResponse(extracted);
+}
+
+function normalizeProcessFlag(flag) {
+    const value = String(flag ?? "sheet")
+        .trim()
+        .toLowerCase();
+
+    if (
+        value === "kilogram" ||
+        value === "kilograms" ||
+        value === "kg" ||
+        value === "peso"
+    ) {
+        return "kilogram";
+    }
+
+    if (
+        !value ||
+        value === "sheet" ||
+        value === "orden" ||
+        value === "salida"
+    ) {
+        return "sheet";
+    }
+
+    return null;
+}
+
+// -----------------------------------------------------------------------------
 // API
 // -----------------------------------------------------------------------------
 
 app.post("/process", async (req, res) => {
     try {
-        const { image } = req.body;
+        const { image, flag } = req.body;
 
         if (!image) {
             return res.status(400).json({
                 error: "Missing 'image' field"
+            });
+        }
+
+        const processFlag = normalizeProcessFlag(flag ?? "sheet");
+
+        if (!processFlag) {
+            return res.status(400).json({
+                error: "Invalid 'flag'. Use 'sheet' or 'kilogram'."
             });
         }
 
@@ -951,7 +1170,11 @@ app.post("/process", async (req, res) => {
             });
         }
 
-        const result = await processDocument(inputBuffer);
+        const result =
+            processFlag === "kilogram"
+                ? await processKilogramDocument(inputBuffer)
+                : await processDocument(inputBuffer);
+
         return res.json(result);
     } catch (error) {
         console.error(error);

@@ -253,23 +253,24 @@ function parseDateTime(text) {
     }
 
     const match = text.match(
-        /(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4}).*?(\d{1,2}):(\d{2})/
+        /(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4}).*?(\d{1,2}):(\d{2})(?::(\d{2}))?/
     );
 
     if (!match) {
         return text;
     }
 
-    let [, d, m, y, hour, minute] = match;
+    let [, d, m, y, hour, minute, second] = match;
 
     if (y.length === 2) {
         y = `20${y}`;
     }
 
-    return (
+    const base =
         `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")} ` +
-        `${hour.padStart(2, "0")}:${minute}`
-    );
+        `${hour.padStart(2, "0")}:${minute}`;
+
+    return second != null ? `${base}:${second}` : base;
 }
 
 function cleanFolio(text) {
@@ -1015,24 +1016,42 @@ async function extractKilogramWithVision(imageBuffer) {
     const response = await openai.chat.completions.create({
         model: OPENAI_MODEL,
         temperature: 0,
-        max_tokens: 300,
+        max_tokens: 800,
         response_format: { type: "json_object" },
         messages: [
             {
                 role: "system",
                 content:
-                    "You extract weight values from Recicladora TAGA NOTA DE ENTRADA receipts. " +
+                    "You extract data from Recicladora TAGA NOTA DE ENTRADA receipts. " +
                     "Return JSON only with this exact shape:\n" +
                     "{\n" +
+                    '  "serie": string|null,\n' +
+                    '  "folio": string|null,\n' +
+                    '  "ticket": string|null,\n' +
+                    '  "sitio": string|null,\n' +
+                    '  "fecha": string|null,\n' +
+                    '  "empresa": string|null,\n' +
+                    '  "matricula": string|null,\n' +
+                    '  "chofer": string|null,\n' +
+                    '  "entrada": string|null,\n' +
+                    '  "salida": string|null,\n' +
+                    '  "movimiento": string|null,\n' +
+                    '  "producto": string|null,\n' +
                     '  "bruto": number|null,\n' +
                     '  "tara": number|null,\n' +
-                    '  "neto": number|null\n' +
+                    '  "neto": number|null,\n' +
+                    '  "costo": number|null,\n' +
+                    '  "total": number|null,\n' +
+                    '  "pesador": string|null,\n' +
+                    '  "recibido": boolean\n' +
                     "}\n" +
                     "Rules:\n" +
-                    "- Read only the numeric values next to BRUTO, TARA, and NETO.\n" +
-                    "- Return plain numbers (e.g. 20060 or 20060.00), not currency strings.\n" +
-                    "- Ignore COSTO, TOTAL, ticket numbers, and dates.\n" +
-                    "- If a value is missing or unreadable, return null.\n" +
+                    "- sitio is the location line near the top (e.g. SOLUCIONES PATIO VIAS).\n" +
+                    "- serie is the letter after SERIE (e.g. A). folio/ticket are the receipt number (e.g. 15736).\n" +
+                    "- fecha, entrada, salida: keep date and time, prefer YYYY-MM-DD HH:mm:ss.\n" +
+                    "- bruto, tara, neto, costo, total: plain numbers (20060.00 -> 20060 or 20060.00).\n" +
+                    "- recibido: true if a RECIBIDO stamp/signature is present, else false.\n" +
+                    "- If a value is missing or unreadable, return null (or false for recibido).\n" +
                     "- Do not invent values. Never apologize."
             },
             {
@@ -1040,7 +1059,7 @@ async function extractKilogramWithVision(imageBuffer) {
                 content: [
                     {
                         type: "text",
-                        text: "Extract BRUTO, TARA, and NETO from this NOTA DE ENTRADA image."
+                        text: "Extract all fields from this NOTA DE ENTRADA image."
                     },
                     {
                         type: "image_url",
@@ -1066,10 +1085,31 @@ async function extractKilogramWithVision(imageBuffer) {
 }
 
 function buildKilogramResponse(raw) {
+    const folio =
+        cleanFolio(raw?.folio) ||
+        cleanFolio(raw?.ticket) ||
+        null;
+
     return {
+        serie: cleanOcrText(raw?.serie) || null,
+        folio,
+        ticket: cleanFolio(raw?.ticket) || folio,
+        sitio: cleanOcrText(raw?.sitio) || null,
+        fecha: parseDateTime(raw?.fecha) || null,
+        empresa: cleanOcrText(raw?.empresa) || null,
+        matricula: cleanOcrText(raw?.matricula) || null,
+        chofer: cleanOcrText(raw?.chofer) || null,
+        entrada: parseDateTime(raw?.entrada) || null,
+        salida: parseDateTime(raw?.salida) || null,
+        movimiento: cleanOcrText(raw?.movimiento) || null,
+        producto: cleanOcrText(raw?.producto) || null,
         bruto: parseWeight(raw?.bruto),
         tara: parseWeight(raw?.tara),
-        neto: parseWeight(raw?.neto)
+        neto: parseWeight(raw?.neto),
+        costo: parseWeight(raw?.costo),
+        total: parseWeight(raw?.total),
+        pesador: cleanOcrText(raw?.pesador) || null,
+        recibido: Boolean(raw?.recibido)
     };
 }
 

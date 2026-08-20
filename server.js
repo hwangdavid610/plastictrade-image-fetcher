@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const express = require("express");
 const cv = require("@u4/opencv4nodejs");
 const OpenAI = require("openai");

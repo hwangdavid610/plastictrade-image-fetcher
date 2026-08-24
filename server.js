@@ -3095,6 +3095,11 @@ async function processDocument(inputBuffer) {
 
         headerOverride = {
             ...headerRaw,
+            logistica_marks:
+                logisticaOnly?.logistica_marks ||
+                logisticaOnly?.marks ||
+                headerRaw?.logistica_marks ||
+                null,
             logistica_option:
                 logisticaOnly?.logistica_option ??
                 headerRaw?.logistica_option ??
@@ -3124,8 +3129,37 @@ async function processDocument(inputBuffer) {
     const jpegBuffer = matToJpeg(imageForOcr);
     const extracted = await extractDocumentWithVision(jpegBuffer);
 
-    // Prefer OpenCV checkbox when available; otherwise Vision option number.
+    const fieldId = unwrapFieldClips(fieldOverride).fields.id_operador;
+    const logisticaHint = logisticaFromOperadorId(
+        normalizeOperadorId(fieldId) ||
+            extracted?.operador?.id_operador
+    );
+    const opencvInk = logisticaOverride
+        ? {
+              selected_logistica: logisticaOverride,
+              score: 40,
+              margin: 20
+          }
+        : null;
+
+    console.log("LOGÍSTICA OpenCV checkbox:", logisticaOverride);
+    console.log("LOGÍSTICA from operator ID:", logisticaHint);
+
+    // Same picker as Vision-only: the filled circle belongs to the name on
+    // its right (BIO fill is often read as PLASTIC). Operator IDs like
+    // PT-BIO correct that off-by-one without overriding unrelated marks.
     const logisticaFinal =
+        pickSelectedLogistica(
+            opencvInk,
+            headerOverride,
+            logisticaHint
+        ) ||
+        pickSelectedLogistica(
+            opencvInk,
+            extracted,
+            logisticaHint
+        ) ||
+        logisticaHint ||
         logisticaOverride ||
         resolveLogistica(headerOverride) ||
         resolveLogistica(extracted) ||
